@@ -10,7 +10,6 @@ import os
 import sys
 import re
 import requests
-import json
 from typing import List, Dict, Optional
 from datetime import datetime
 from openai import OpenAI
@@ -41,19 +40,24 @@ class HackerNewsAPI:
             print(f"Error fetching top stories: {e}")
             return []
     
-    def _get_item(self, item_id: int) -> Optional[Dict]:
+    def _get_item(self, item_id: int, depth: int = 0) -> Optional[Dict]:
         """Get item details by ID"""
         try:
             response = requests.get(f"{self.BASE_URL}/item/{item_id}.json", timeout=10)
             response.raise_for_status()
             item = response.json()
             
-            # Get top comments if available
-            if item and 'kids' in item:
+            # Get top comments for top-level stories only
+            if (
+                item
+                and item.get('type') == 'story'
+                and 'kids' in item
+                and depth == 0
+            ):
                 item['top_comments'] = []
                 # Get first 3 comments
                 for comment_id in item['kids'][:3]:
-                    comment = self._get_item(comment_id)
+                    comment = self._get_item(comment_id, depth + 1)
                     if comment and comment.get('text'):
                         item['top_comments'].append(comment)
             
@@ -73,7 +77,8 @@ class ReportGenerator:
             client_kwargs["base_url"] = base_url
         
         self.client = OpenAI(**client_kwargs)
-        self.model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        model_from_env = os.getenv("OPENAI_MODEL")
+        self.model = model_from_env or "gpt-3.5-turbo"
     
     def generate_report(self, stories: List[Dict]) -> str:
         """Generate Japanese report from Hacker News stories"""
@@ -158,6 +163,9 @@ class ReportGenerator:
         for i, story in enumerate(stories, 1):
             title = story.get('title', 'No title')
             url = story.get('url', '')
+            # Fallback to HN discussion link if URL is missing (Ask HN/Show HN)
+            if not url:
+                url = f"https://news.ycombinator.com/item?id={story.get('id', '')}"
             score = story.get('score', 0)
             comments_count = story.get('descendants', 0)
             
@@ -207,7 +215,10 @@ class DiscordWebhook:
     
     def _send_chunk(self, content: str):
         """Send a single chunk to Discord"""
-        payload = {"content": content}
+        payload = {
+            "content": content,
+            "allowed_mentions": {"parse": []}  # Disable all mention parsing
+        }
         response = requests.post(
             self.webhook_url,
             json=payload,

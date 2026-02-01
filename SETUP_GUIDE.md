@@ -98,7 +98,7 @@
 
 ### 記事の数を変更
 
-`generate_report.py` の280行目付近：
+`generate_report.py` 内の、トップストーリーを取得している箇所：
 ```python
 stories = hn_api.get_top_stories(limit=5)  # 5を希望の数に変更
 ```
