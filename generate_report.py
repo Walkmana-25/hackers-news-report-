@@ -8,6 +8,7 @@ and posts it to Discord via webhook.
 
 import os
 import sys
+import re
 import requests
 import json
 from typing import List, Dict, Optional
@@ -79,6 +80,11 @@ class ReportGenerator:
         # Prepare context for AI
         context = self._prepare_context(stories)
         
+        # Get current date in JST
+        from datetime import timezone, timedelta
+        jst = timezone(timedelta(hours=9))
+        current_date = datetime.now(jst).strftime('%Y年%m月%d日')
+        
         prompt = f"""あなたはテクノロジーニュースのレポーターです。
 以下のHacker Newsのトップ5記事とコメントを元に、日本語で読みやすいレポートを作成してください。
 
@@ -86,7 +92,7 @@ class ReportGenerator:
 {context}
 
 以下の形式でレポートを作成してください:
-1. タイトル: 「Hacker News デイリーレポート - {datetime.now().strftime('%Y年%m月%d日')}」
+1. タイトル: 「Hacker News デイリーレポート - {current_date}」
 2. 簡単な導入文
 3. 各記事について:
    - 記事タイトルとURL
@@ -166,7 +172,6 @@ class ReportGenerator:
                 for j, comment in enumerate(story['top_comments'][:3], 1):
                     text = comment.get('text', '')
                     # Clean HTML tags from comment text
-                    import re
                     text = re.sub('<[^<]+?>', '', text)
                     text = text[:200] + '...' if len(text) > 200 else text
                     part += f"  - {text}\n"
