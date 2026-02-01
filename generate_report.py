@@ -70,15 +70,19 @@ class HackerNewsAPI:
 class ReportGenerator:
     """Generates report using OpenAI-compatible API"""
     
-    def __init__(self, api_key: str, base_url: Optional[str] = None):
+    def __init__(self, api_key: str, base_url: Optional[str] = None, model: Optional[str] = None):
         """Initialize OpenAI client with custom base URL if provided"""
         client_kwargs = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url
         
         self.client = OpenAI(**client_kwargs)
-        model_from_env = os.getenv("OPENAI_MODEL")
-        self.model = model_from_env or "gpt-3.5-turbo"
+        # Use provided model, or get from env, or use default
+        if model:
+            self.model = model
+        else:
+            model_from_env = os.getenv("OPENAI_MODEL")
+            self.model = model_from_env or "gpt-3.5-turbo"
     
     def generate_report(self, stories: List[Dict]) -> str:
         """Generate Japanese report from Hacker News stories"""
@@ -263,6 +267,7 @@ def main():
     github_token = os.getenv("GITHUB_TOKEN")
     openai_api_key = os.getenv("OPENAI_API_KEY")
     openai_base_url = os.getenv("OPENAI_BASE_URL")  # Optional
+    openai_model = os.getenv("OPENAI_MODEL")  # Optional
     discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     
     # Prioritize user-provided API key, fallback to GitHub Models
@@ -272,15 +277,16 @@ def main():
         print("Using GitHub Models for AI generation (no API key configured)...")
         openai_api_key = github_token
         # GitHub Models inference endpoint
-        openai_base_url = "https://models.inference.ai.azure.com"
+        if not openai_base_url:
+            openai_base_url = "https://models.inference.ai.azure.com"
         # Set default model for GitHub Models if not specified
-        if not os.getenv("OPENAI_MODEL"):
-            os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
-    
-    # Validate required environment variables
-    if not openai_api_key:
-        print("Error: OPENAI_API_KEY environment variable is required")
-        print("Note: In GitHub Actions, GITHUB_TOKEN is automatically used with GitHub Models")
+        if not openai_model:
+            openai_model = "gpt-4o-mini"
+    else:
+        # Neither API key nor GitHub token available
+        print("Error: No API configuration found")
+        print("  - Set OPENAI_API_KEY in secrets/environment, or")
+        print("  - Run in GitHub Actions where GITHUB_TOKEN is automatically available")
         sys.exit(1)
     
     if not discord_webhook_url:
@@ -301,7 +307,7 @@ def main():
         
         # Step 2: Generate report using AI
         print("Generating report with AI...")
-        generator = ReportGenerator(openai_api_key, openai_base_url)
+        generator = ReportGenerator(openai_api_key, openai_base_url, openai_model)
         report = generator.generate_report(stories)
         
         print("Initial report generated")
