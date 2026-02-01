@@ -18,10 +18,18 @@
 GitHub リポジトリの Settings > Secrets and variables > Actions で以下のシークレットを設定してください：
 
 #### 必須設定:
-- `OPENAI_API_KEY`: OpenAI APIキー（または互換APIのキー）
 - `DISCORD_WEBHOOK_URL`: Discord ウェブフックURL
 
-#### オプション設定:
+#### AI モデルの設定（以下のいずれか）:
+
+**オプション A: GitHub Models を使用（推奨・無料）**
+- GitHub Actions実行時は自動的に`GITHUB_TOKEN`を使用してGitHub Modelsにアクセスします
+- 追加のシークレット設定は不要です
+- デフォルトモデル: `gpt-4o-mini`
+- モデルを変更したい場合は、`OPENAI_MODEL`シークレットを設定してください（例: `gpt-4o`, `gpt-4-turbo`など）
+
+**オプション B: OpenAI または互換APIを使用**
+- `OPENAI_API_KEY`: OpenAI APIキー（または互換APIのキー）
 - `OPENAI_BASE_URL`: OpenAI互換APIのベースURL（例: `https://api.openai.com/v1`）
 - `OPENAI_MODEL`: 使用するモデル名（デフォルト: `gpt-3.5-turbo`）
 

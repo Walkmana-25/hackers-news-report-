@@ -260,13 +260,23 @@ def main():
     print("Starting Hacker News Daily Report Generator...")
     
     # Get configuration from environment variables
+    github_token = os.getenv("GITHUB_TOKEN")
     openai_api_key = os.getenv("OPENAI_API_KEY")
     openai_base_url = os.getenv("OPENAI_BASE_URL")  # Optional
     discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     
+    # Use GitHub Models when running in GitHub Actions
+    if github_token and not openai_api_key:
+        print("Using GitHub Models for AI generation...")
+        openai_api_key = github_token
+        openai_base_url = "https://models.inference.ai.azure.com"
+        # Set default model for GitHub Models if not specified
+        if not os.getenv("OPENAI_MODEL"):
+            os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
+    
     # Validate required environment variables
     if not openai_api_key:
-        print("Error: OPENAI_API_KEY environment variable is required")
+        print("Error: OPENAI_API_KEY or GITHUB_TOKEN environment variable is required")
         sys.exit(1)
     
     if not discord_webhook_url:

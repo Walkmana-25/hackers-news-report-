@@ -4,12 +4,13 @@
 
 ## 必要なもの
 
-1. **OpenAI APIキー**（または互換APIのキー）
-   - OpenAI: https://platform.openai.com/
-   - または任意のOpenAI互換API（例：Azure OpenAI, ローカルLLMなど）
-
-2. **Discord Webhook URL**
+1. **Discord Webhook URL**（必須）
    - レポートを投稿するDiscordチャンネルのWebhook URL
+
+2. **AIモデルの選択**（以下のいずれか）
+   - **GitHub Models**（推奨・無料）：GitHub Actions実行時に自動的に使用されます
+   - **OpenAI API**：https://platform.openai.com/
+   - **その他のOpenAI互換API**：Azure OpenAI, ローカルLLMなど
 
 ## セットアップ手順
 
@@ -33,13 +34,27 @@
 
 #### 必須シークレット:
 
-**OPENAI_API_KEY**
-- Name: `OPENAI_API_KEY`
-- Secret: あなたのOpenAI APIキー
-
 **DISCORD_WEBHOOK_URL**
 - Name: `DISCORD_WEBHOOK_URL`
 - Secret: ステップ1で取得したWebhook URL
+
+#### AIモデルの設定:
+
+**方法A: GitHub Models を使用（推奨・無料）**
+
+GitHub Actions実行時は自動的に`GITHUB_TOKEN`を使用してGitHub Modelsにアクセスします。
+追加のシークレット設定は不要です。
+
+- デフォルトモデル: `gpt-4o-mini`
+- モデルを変更する場合は、以下のオプションシークレットを設定してください
+
+**方法B: OpenAI または互換APIを使用**
+
+以下のシークレットを設定してください：
+
+**OPENAI_API_KEY**
+- Name: `OPENAI_API_KEY`
+- Secret: あなたのOpenAI APIキー（または互換APIのキー）
 
 #### オプションシークレット:
 
@@ -49,7 +64,9 @@
 
 **OPENAI_MODEL**（デフォルト以外のモデルを使用する場合）
 - Name: `OPENAI_MODEL`
-- Secret: モデル名（例：`gpt-4`, `gpt-3.5-turbo`など）
+- Secret: モデル名
+  - GitHub Models使用時: `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`など
+  - OpenAI使用時: `gpt-4`, `gpt-3.5-turbo`など
 
 ### 3. 動作確認
 
