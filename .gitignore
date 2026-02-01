@@ -37,3 +37,7 @@ env/
 
 # Logs
 *.log
+
+# Test files
+test_*.py
+
