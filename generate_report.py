@@ -265,9 +265,11 @@ def main():
     openai_base_url = os.getenv("OPENAI_BASE_URL")  # Optional
     discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     
-    # Use GitHub Models when running in GitHub Actions
-    if github_token and not openai_api_key:
-        print("Using GitHub Models for AI generation...")
+    # Prioritize user-provided API key, fallback to GitHub Models
+    if openai_api_key:
+        print("Using configured OpenAI-compatible API...")
+    elif github_token:
+        print("Using GitHub Models for AI generation (no API key configured)...")
         openai_api_key = github_token
         # GitHub Models inference endpoint
         openai_base_url = "https://models.inference.ai.azure.com"
@@ -277,11 +279,8 @@ def main():
     
     # Validate required environment variables
     if not openai_api_key:
-        if github_token:
-            print("Error: Failed to configure API. Please set OPENAI_API_KEY secret.")
-        else:
-            print("Error: OPENAI_API_KEY environment variable is required")
-            print("Note: When running in GitHub Actions, GITHUB_TOKEN will be used automatically for GitHub Models")
+        print("Error: OPENAI_API_KEY environment variable is required")
+        print("Note: In GitHub Actions, GITHUB_TOKEN is automatically used with GitHub Models")
         sys.exit(1)
     
     if not discord_webhook_url:
