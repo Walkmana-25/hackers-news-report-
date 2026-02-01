@@ -78,11 +78,7 @@ class ReportGenerator:
         
         self.client = OpenAI(**client_kwargs)
         # Use provided model, or get from env, or use default
-        if model:
-            self.model = model
-        else:
-            model_from_env = os.getenv("OPENAI_MODEL")
-            self.model = model_from_env or "gpt-3.5-turbo"
+        self.model = model or os.getenv("OPENAI_MODEL") or "gpt-3.5-turbo"
     
     def generate_report(self, stories: List[Dict]) -> str:
         """Generate Japanese report from Hacker News stories"""
