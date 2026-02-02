@@ -9,6 +9,7 @@ and posts it to Discord via webhook.
 import os
 import sys
 import re
+import html
 import logging
 import requests
 from typing import List, Dict, Optional
@@ -184,8 +185,10 @@ class ReportGenerator:
         for c in comments:
             text = c.get("text", "")
             text = re.sub("<[^<]+?>", "", text)
+            text = html.unescape(text)
             text = text[:200] + "..." if len(text) > 200 else text
-            comments_text.append(text)
+            if text.strip():
+                comments_text.append(text)
         comments_joined = "\n".join(f"- {t}" for t in comments_text) if comments_text else "コメントなし"
         
         prompt = f"""Hacker Newsのトップ記事 {index} を要約してください。
@@ -219,7 +222,12 @@ URL: {url}
     def generate_overall_summary(self, story_messages: List[str]) -> str:
         """Generate overall summary from per-story messages"""
         joined = "\n\n".join(story_messages)
-        prompt = f"""以下の{len(story_messages)}件の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。
+        count = len(story_messages)
+        if count == 1:
+            lead_text = "以下の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
+        else:
+            lead_text = f"以下の{count}件の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
+        prompt = f"""{lead_text}
 
 {joined}
 """
@@ -396,19 +404,47 @@ def main():
         # Step 2: Per-article processing loop
         story_messages = []
         max_items = min(5, len(stories))
-        for i in range(max_items):
-            story = stories[i]
-            logger.info("Generating summary for story %d: %s", i + 1, story.get("title"))
-            message = generator.generate_story_summary(story, i + 1)
+        if max_items < 1:
+            logger.error("Error: Not enough stories to generate report")
+            sys.exit(1)
+        for index, story in enumerate(stories[:max_items], start=1):
+            logger.info("Generating summary for story %d: %s", index, story.get("title"))
+            message = generator.generate_story_summary(story, index)
+            if not message or "の要約生成に失敗しました" in str(message):
+                logger.error("✗ Failed to generate summary for story %d; skipping this story", index)
+                continue
+            if len(message.strip()) < 50:
+                logger.warning("Story %d summary too short; skipping from overall summary", index)
+                continue
             story_messages.append(message)
-            logger.info("Posting story %d message to Discord...", i + 1)
+            logger.info("Posting story %d message to Discord...", index)
             if not webhook.post_message(message):
-                logger.error("✗ Failed to post story %d message to Discord", i + 1)
+                logger.error("✗ Failed to post story %d message to Discord", index)
                 sys.exit(1)
         
         # Step 3: Overall summary
+        if not story_messages:
+            logger.error("Error: No successful story summaries generated; aborting overall summary generation")
+            sys.exit(1)
+
         logger.info("Generating overall summary...")
         overall_summary = generator.generate_overall_summary(story_messages)
+
+        # Validate overall summary before posting
+        if overall_summary is None:
+            logger.warning("Overall summary generation returned None. Using fallback message.")
+            overall_summary = "⚠ 全体の要約を生成できませんでしたが、個別の記事サマリーは上記をご参照ください。"
+        else:
+            overall_summary_stripped = overall_summary.strip()
+            if not overall_summary_stripped or len(overall_summary_stripped) < 50:
+                logger.warning(
+                    "Overall summary seems too short or empty (length=%d). Using fallback message.",
+                    len(overall_summary_stripped),
+                )
+                overall_summary = (
+                    "⚠ 全体の要約を十分に生成できませんでしたが、上記の各記事サマリーから本日の動向を確認してください。"
+                )
+
         logger.info("Posting overall summary to Discord...")
         if not webhook.post_message(overall_summary):
             logger.error("✗ Failed to post overall summary to Discord")
