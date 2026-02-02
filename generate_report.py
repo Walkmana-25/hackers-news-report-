@@ -140,11 +140,25 @@ URL: {url}
                 temperature=0.6,
                 max_tokens=600
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            if isinstance(content, list):
+                # Some providers return list of content blocks
+                content = "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in content
+                )
+
+            if not content or not content.strip():
+                logger.warning("Empty summary returned for story %d; using fallback text.", index)
+                content = (
+                    f"{title} ({url}) の要約を生成できませんでした。"
+                    f" スコア: {score}。主要コメント: {comments_joined}"
+                )
+            return content
         except Exception as e:
             logger.exception("Error generating story summary: %s", e)
             return f"{title} ({url}) の要約生成に失敗しました。"
-    
+
     def generate_overall_summary(self, story_messages: List[str]) -> str:
         """Generate overall summary from per-story messages"""
         joined = "\n\n".join(story_messages)
