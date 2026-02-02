@@ -9,11 +9,14 @@ and posts it to Discord via webhook.
 import os
 import sys
 import re
+import html
 import logging
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
+
+MIN_SUMMARY_LENGTH = 50
 
 
 logger = logging.getLogger(__name__)
@@ -96,81 +99,78 @@ class ReportGenerator:
         # Use provided model, or get from env, or use default
         self.model = model or os.getenv("OPENAI_MODEL") or "gpt-3.5-turbo"
     
-    def generate_report(self, stories: List[Dict]) -> str:
-        """Generate Japanese report from Hacker News stories"""
-        # Prepare context for AI
-        context = self._prepare_context(stories)
+    def generate_story_summary(self, story: Dict, index: int) -> str:
+        """Generate summary for a single story"""
+        title = story.get("title", "No title")
+        url = story.get("url") or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+        score = story.get("score", 0)
+        comments = story.get("top_comments", [])
         
-        # Get current date in JST
-        from datetime import timezone, timedelta
-        jst = timezone(timedelta(hours=9))
-        current_date = datetime.now(jst).strftime('%Y年%m月%d日')
+        # Prepare comments text
+        comments_text = []
+        for c in comments:
+            text = c.get("text", "")
+            text = re.sub("<[^<]+?>", "", text)
+            text = html.unescape(text)
+            text = text[:200] + "..." if len(text) > 200 else text
+            if text.strip():
+                comments_text.append(text)
+        comments_joined = "\n".join(f"- {t}" for t in comments_text) if comments_text else "コメントなし"
         
-        prompt = f"""あなたはテクノロジーニュースのレポーターです。
-以下のHacker Newsのトップ5記事とコメントを元に、日本語で読みやすいレポートを作成してください。
+        prompt = f"""Hacker Newsのトップ記事 {index} を要約してください。
+タイトル: {title}
+URL: {url}
+スコア: {score}
+主なコメント:
+{comments_joined}
 
-記事データ:
-{context}
-
-以下の形式でレポートを作成してください:
-1. タイトル: 「Hacker News デイリーレポート - {current_date}」
-2. 簡単な導入文
-3. 各記事について:
-   - 記事タイトルとURL
-   - 記事の要点（コメントも参考にして）
-   - なぜ重要か、興味深い点
-4. 全体的な傾向やまとめ
-
-読みやすく、情報価値の高いレポートにしてください。"""
-
+以下の形式で短い日本語メッセージを作成してください:
+- タイトルとURL
+- 記事本文の推測要約（リンク先の概要として簡潔に）
+- コメントから読み取れるポイントの要約
+- なぜ重要か/興味深いかを一文
+"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "あなたは優秀なテクノロジーニュースのレポーターです。"},
+                    {"role": "system", "content": "あなたはテクノロジーニュースのライターです。簡潔にまとめてください。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=2000
+                temperature=0.6,
+                max_tokens=600
             )
-            
             return response.choices[0].message.content
         except Exception as e:
-            print(f"Error generating report: {e}")
-            raise
+            logger.exception("Error generating story summary: %s", e)
+            return f"{title} ({url}) の要約生成に失敗しました。"
     
-    def self_review_report(self, report: str) -> str:
-        """AI self-reviews the generated report and returns improved version"""
-        review_prompt = f"""以下のHacker Newsレポートをレビューして、改善してください。
+    def generate_overall_summary(self, story_messages: List[str]) -> str:
+        """Generate overall summary from per-story messages"""
+        joined = "\n\n".join(story_messages)
+        count = len(story_messages)
+        if count == 1:
+            lead_text = "以下の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
+        else:
+            lead_text = f"以下の{count}件の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
+        prompt = f"""{lead_text}
 
-レビュー観点:
-1. 情報の正確性と完全性
-2. 読みやすさと構成
-3. 日本語の自然さ
-4. 重要なポイントが明確か
-5. 全体的な品質
-
-レポート:
-{report}
-
-改善版のレポートを出力してください（レビューコメントは不要、改善されたレポートのみ出力）。"""
-
+{joined}
+"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "あなたは優秀な編集者です。レポートを改善してください。"},
-                    {"role": "user", "content": review_prompt}
+                    {"role": "system", "content": "あなたはテクノロジーニュース編集者です。全体のまとめを作成してください。"},
+                    {"role": "user", "content": prompt}
                 ],
                 temperature=0.5,
-                max_tokens=2500
+                max_tokens=400
             )
-            
             return response.choices[0].message.content
         except Exception as e:
-            print(f"Error reviewing report: {e}")
-            # Return original if review fails
-            return report
+            logger.exception("Error generating overall summary: %s", e)
+            return "全体まとめの生成に失敗しました。"
     
     def _prepare_context(self, stories: List[Dict]) -> str:
         """Prepare formatted context from stories"""
@@ -324,47 +324,56 @@ def main():
         
         logger.info("Fetched %d stories", len(stories))
         
-        # Step 2: Generate report using AI
-        logger.info("Generating report with AI...")
         generator = ReportGenerator(openai_api_key, openai_base_url, openai_model)
-        report = generator.generate_report(stories)
-        
-        logger.info("Initial report generated")
-        
-        # Step 3: Self-review the report
-        logger.info("Self-reviewing report with AI...")
-        reviewed_report = generator.self_review_report(report)
-        
-        logger.info("Report reviewed and improved")
-
-        # Fallback: ensure the report has sufficient content
-        if not reviewed_report or len(reviewed_report.strip()) < 200:
-            logger.warning("Generated report was too short. Using fallback template.")
-            jst = timezone(timedelta(hours=9))
-            current_date = datetime.now(jst).strftime('%Y年%m月%d日')
-            lines = [
-                f"Hacker News Daily Report - {current_date}",
-                "ご覧いただきありがとうございます。テクノロジーニュースの担当です。",
-                "",
-                "今日のHacker News:"
-            ]
-            for story in stories:
-                title = story.get('title', 'No title')
-                url = story.get('url') or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
-                lines.append(f"- {title} ({url})")
-            reviewed_report = "\n".join(lines)
-        
-        # Step 4: Post to Discord
-        logger.info("Posting report to Discord...")
         webhook = DiscordWebhook(discord_webhook_url)
-        success = webhook.post_message(reviewed_report)
+
+        # Step 2: Per-article processing loop
+        story_messages = []
+        max_items = min(5, len(stories))
+        for index, story in enumerate(stories[:max_items], start=1):
+            logger.info("Generating summary for story %d: %s", index, story.get("title"))
+            message = generator.generate_story_summary(story, index)
+            if not message:
+                logger.error("✗ Failed to generate summary for story %d; skipping this story", index)
+                continue
+            if len(message.strip()) < MIN_SUMMARY_LENGTH:
+                logger.warning("Story %d summary too short; skipping from overall summary", index)
+                continue
+            story_messages.append(message)
+            logger.info("Posting story %d message to Discord...", index)
+            if not webhook.post_message(message):
+                logger.error("✗ Failed to post story %d message to Discord", index)
+                sys.exit(1)
         
-        if success:
-            logger.info("✓ Report successfully posted to Discord!")
-            logger.info("FINAL REPORT:\n%s", reviewed_report)
-        else:
-            logger.error("✗ Failed to post report to Discord")
+        # Step 3: Overall summary
+        if not story_messages:
+            logger.error("Error: No successful story summaries generated; aborting overall summary generation")
             sys.exit(1)
+
+        logger.info("Generating overall summary...")
+        overall_summary = generator.generate_overall_summary(story_messages)
+
+        # Validate overall summary before posting
+        if overall_summary is None:
+            logger.warning("Overall summary generation returned None. Using fallback message.")
+            overall_summary = "⚠ 全体の要約を生成できませんでしたが、個別の記事サマリーは上記をご参照ください。"
+        else:
+            overall_summary_stripped = overall_summary.strip()
+            if not overall_summary_stripped or len(overall_summary_stripped) < MIN_SUMMARY_LENGTH:
+                logger.warning(
+                    "Overall summary seems too short or empty (length=%d). Using fallback message.",
+                    len(overall_summary_stripped),
+                )
+                overall_summary = (
+                    "⚠ 全体の要約を十分に生成できませんでしたが、上記の各記事サマリーから本日の動向を確認してください。"
+                )
+
+        logger.info("Posting overall summary to Discord...")
+        if not webhook.post_message(overall_summary):
+            logger.error("✗ Failed to post overall summary to Discord")
+            sys.exit(1)
+        logger.info("✓ Report successfully posted to Discord!")
+        logger.info("FINAL OVERALL SUMMARY:\n%s", overall_summary)
             
     except Exception as e:
         logger.exception("Error in main execution: %s", e)
