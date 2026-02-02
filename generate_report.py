@@ -172,6 +172,72 @@ class ReportGenerator:
             # Return original if review fails
             return report
     
+    def generate_story_summary(self, story: Dict, index: int) -> str:
+        """Generate summary for a single story"""
+        title = story.get("title", "No title")
+        url = story.get("url") or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+        score = story.get("score", 0)
+        comments = story.get("top_comments", [])
+        
+        # Prepare comments text
+        comments_text = []
+        for c in comments:
+            text = c.get("text", "")
+            text = re.sub("<[^<]+?>", "", text)
+            text = text[:200] + "..." if len(text) > 200 else text
+            comments_text.append(text)
+        comments_joined = "\n".join(f"- {t}" for t in comments_text) if comments_text else "コメントなし"
+        
+        prompt = f"""Hacker Newsのトップ記事 {index} を要約してください。
+タイトル: {title}
+URL: {url}
+スコア: {score}
+主なコメント:
+{comments_joined}
+
+以下の形式で短い日本語メッセージを作成してください:
+- タイトルとURL
+- 記事本文の推測要約（リンク先の概要として簡潔に）
+- コメントから読み取れるポイントの要約
+- なぜ重要か/興味深いかを一文
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "あなたはテクノロジーニュースのライターです。簡潔にまとめてください。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.6,
+                max_tokens=600
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.exception("Error generating story summary: %s", e)
+            return f"{title} ({url}) の要約生成に失敗しました。"
+    
+    def generate_overall_summary(self, story_messages: List[str]) -> str:
+        """Generate overall summary from per-story messages"""
+        joined = "\n\n".join(story_messages)
+        prompt = f"""以下の{len(story_messages)}件の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。
+
+{joined}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "あなたはテクノロジーニュース編集者です。全体のまとめを作成してください。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=400
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.exception("Error generating overall summary: %s", e)
+            return "全体まとめの生成に失敗しました。"
+    
     def _prepare_context(self, stories: List[Dict]) -> str:
         """Prepare formatted context from stories"""
         context_parts = []
@@ -324,47 +390,31 @@ def main():
         
         logger.info("Fetched %d stories", len(stories))
         
-        # Step 2: Generate report using AI
-        logger.info("Generating report with AI...")
         generator = ReportGenerator(openai_api_key, openai_base_url, openai_model)
-        report = generator.generate_report(stories)
-        
-        logger.info("Initial report generated")
-        
-        # Step 3: Self-review the report
-        logger.info("Self-reviewing report with AI...")
-        reviewed_report = generator.self_review_report(report)
-        
-        logger.info("Report reviewed and improved")
-
-        # Fallback: ensure the report has sufficient content
-        if not reviewed_report or len(reviewed_report.strip()) < 200:
-            logger.warning("Generated report was too short. Using fallback template.")
-            jst = timezone(timedelta(hours=9))
-            current_date = datetime.now(jst).strftime('%Y年%m月%d日')
-            lines = [
-                f"Hacker News Daily Report - {current_date}",
-                "ご覧いただきありがとうございます。テクノロジーニュースの担当です。",
-                "",
-                "今日のHacker News:"
-            ]
-            for story in stories:
-                title = story.get('title', 'No title')
-                url = story.get('url') or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
-                lines.append(f"- {title} ({url})")
-            reviewed_report = "\n".join(lines)
-        
-        # Step 4: Post to Discord
-        logger.info("Posting report to Discord...")
         webhook = DiscordWebhook(discord_webhook_url)
-        success = webhook.post_message(reviewed_report)
+
+        # Step 2: Per-article processing loop
+        story_messages = []
+        max_items = min(5, len(stories))
+        for i in range(max_items):
+            story = stories[i]
+            logger.info("Generating summary for story %d: %s", i + 1, story.get("title"))
+            message = generator.generate_story_summary(story, i + 1)
+            story_messages.append(message)
+            logger.info("Posting story %d message to Discord...", i + 1)
+            if not webhook.post_message(message):
+                logger.error("✗ Failed to post story %d message to Discord", i + 1)
+                sys.exit(1)
         
-        if success:
-            logger.info("✓ Report successfully posted to Discord!")
-            logger.info("FINAL REPORT:\n%s", reviewed_report)
-        else:
-            logger.error("✗ Failed to post report to Discord")
+        # Step 3: Overall summary
+        logger.info("Generating overall summary...")
+        overall_summary = generator.generate_overall_summary(story_messages)
+        logger.info("Posting overall summary to Discord...")
+        if not webhook.post_message(overall_summary):
+            logger.error("✗ Failed to post overall summary to Discord")
             sys.exit(1)
+        logger.info("✓ Report successfully posted to Discord!")
+        logger.info("FINAL OVERALL SUMMARY:\n%s", overall_summary)
             
     except Exception as e:
         logger.exception("Error in main execution: %s", e)
