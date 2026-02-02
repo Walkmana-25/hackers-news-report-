@@ -234,8 +234,8 @@ class DiscordWebhook:
         current_chunk = ""
         
         for line in lines:
-            # If a single line is too long, split it
-            if len(line) > max_length:
+            # If a single line is too long (or exactly at the limit), split it
+            if len(line) >= max_length:
                 if current_chunk:
                     chunks.append(current_chunk)
                     current_chunk = ""
