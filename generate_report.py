@@ -313,6 +313,24 @@ def main():
         reviewed_report = generator.self_review_report(report)
         
         print("Report reviewed and improved")
+
+        # Fallback: ensure the report has sufficient content
+        if len(reviewed_report.strip()) < 200 or reviewed_report.strip() in {"", None}:
+            print("Generated report was too short. Using fallback template.")
+            from datetime import timezone, timedelta
+            jst = timezone(timedelta(hours=9))
+            current_date = datetime.now(jst).strftime('%Y年%m月%d日')
+            lines = [
+                f"Hacker News Daily Report - {current_date}",
+                "ご覧いただきありがとうございます。テクノロジーニュースの担当です。",
+                "",
+                "今日のHacker News:"
+            ]
+            for story in stories:
+                title = story.get('title', 'No title')
+                url = story.get('url') or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+                lines.append(f"- {title} ({url})")
+            reviewed_report = "\n".join(lines)
         
         # Step 4: Post to Discord
         print("Posting report to Discord...")
