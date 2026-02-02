@@ -26,6 +26,41 @@ load_dotenv()
 MIN_SUMMARY_LENGTH = 50
 
 
+def extract_japanese_response(text: str) -> str:
+    """
+    Extract Japanese final answer from reasoning content.
+    The reasoning_content often contains English thought process followed by Japanese answer.
+    This function extracts only the Japanese parts that form the final answer.
+    """
+    import re
+
+    # Split by double newlines to get sections
+    sections = text.split('\n\n')
+
+    # Find sections that contain Japanese characters and look like final answers
+    # (not just analytical sections)
+    japanese_sections = []
+    for section in sections:
+        # Check if section contains Japanese characters
+        if re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', section):
+            japanese_sections.append(section)
+
+    if japanese_sections:
+        # Join all Japanese sections
+        result = '\n\n'.join(japanese_sections).strip()
+        # Remove any remaining English-looking headers/numbering at the start
+        lines = result.split('\n')
+        for i, line in enumerate(lines):
+            # Skip lines that look like English headers or numbering
+            if re.search(r'^[\d\*\-\s]*[A-Z][a-z]+.*:', line) or re.search(r'^\d+\.\s+', line):
+                continue
+            # Found the first non-header line with Japanese
+            if re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', line):
+                return '\n'.join(lines[i:]).strip()
+        return result
+    return text
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -379,9 +414,19 @@ URL: {display_url}
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.6,
-                max_tokens=800
+                max_tokens=4000
             )
-            content = response.choices[0].message.content
+
+            message = response.choices[0].message
+            content = message.content
+
+            # Handle glm-4.7 model which returns content in reasoning_content field
+            if not content or not content.strip():
+                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    # Extract only the Japanese final answer from reasoning content
+                    content = extract_japanese_response(message.reasoning_content)
+                    logger.info("Extracted Japanese from reasoning_content for story %d: %d chars", index, len(content or ""))
+
             logger.info("AI response length for story %d: %d chars", index, len(content or ""))
             if isinstance(content, list):
                 # Some providers return list of content blocks
@@ -423,9 +468,20 @@ URL: {display_url}
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.5,
-                max_tokens=600
+                max_tokens=4000
             )
-            content = response.choices[0].message.content
+            message = response.choices[0].message
+            content = message.content
+
+            # Handle glm-4.7 model which returns content in reasoning_content field
+            if not content or not content.strip():
+                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    # Extract only the Japanese final answer from reasoning content
+                    content = extract_japanese_response(message.reasoning_content)
+                    logger.info("Extracted Japanese from reasoning_content for overall summary: %d chars", len(content or ""))
+                    content = message.reasoning_content
+                    logger.info("Using reasoning_content for overall summary: %d chars", len(content or ""))
+
             logger.info("Overall summary AI response length: %d chars", len(content or ""))
             return content
         except Exception as e:
