@@ -16,6 +16,8 @@ from typing import List, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
 
+MIN_SUMMARY_LENGTH = 50
+
 
 logger = logging.getLogger(__name__)
 
@@ -328,16 +330,13 @@ def main():
         # Step 2: Per-article processing loop
         story_messages = []
         max_items = min(5, len(stories))
-        if max_items < 1:
-            logger.error("Error: Not enough stories to generate report")
-            sys.exit(1)
         for index, story in enumerate(stories[:max_items], start=1):
             logger.info("Generating summary for story %d: %s", index, story.get("title"))
             message = generator.generate_story_summary(story, index)
-            if not message or "の要約生成に失敗しました" in str(message):
+            if not message:
                 logger.error("✗ Failed to generate summary for story %d; skipping this story", index)
                 continue
-            if len(message.strip()) < 50:
+            if len(message.strip()) < MIN_SUMMARY_LENGTH:
                 logger.warning("Story %d summary too short; skipping from overall summary", index)
                 continue
             story_messages.append(message)
@@ -360,7 +359,7 @@ def main():
             overall_summary = "⚠ 全体の要約を生成できませんでしたが、個別の記事サマリーは上記をご参照ください。"
         else:
             overall_summary_stripped = overall_summary.strip()
-            if not overall_summary_stripped or len(overall_summary_stripped) < 50:
+            if not overall_summary_stripped or len(overall_summary_stripped) < MIN_SUMMARY_LENGTH:
                 logger.warning(
                     "Overall summary seems too short or empty (length=%d). Using fallback message.",
                     len(overall_summary_stripped),
