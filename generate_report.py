@@ -18,6 +18,10 @@ from openai import OpenAI
 import trafilatura
 from readability import Document
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+# Load environment variables from .env file if it exists
+load_dotenv()
 
 MIN_SUMMARY_LENGTH = 50
 
@@ -292,7 +296,7 @@ class ReportGenerator:
         if self.ENABLE_ARTICLE_FETCH:
             self.content_fetcher = WebContentFetcher(
                 timeout=int(os.getenv("ARTICLE_FETCH_TIMEOUT", "10")),
-                max_content_chars=int(os.getenv("MAX_ARTICLE_CONTENT_CHARS", "3000"))
+                max_content_chars=int(os.getenv("MAX_ARTICLE_CONTENT_CHARS", "1500"))
             )
         else:
             self.content_fetcher = None
@@ -364,6 +368,9 @@ URL: {display_url}
 - コメントから読み取れるポイントの要約
 - なぜ重要か/興味深いかを一文
 """
+        # Log prompt length for debugging
+        logger.info("Generating summary for story %d with prompt length: %d chars", index, len(prompt))
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -372,9 +379,10 @@ URL: {display_url}
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.6,
-                max_tokens=600
+                max_tokens=800
             )
             content = response.choices[0].message.content
+            logger.info("AI response length for story %d: %d chars", index, len(content or ""))
             if isinstance(content, list):
                 # Some providers return list of content blocks
                 content = "".join(
@@ -405,6 +413,8 @@ URL: {display_url}
 
 {joined}
 """
+        logger.info("Generating overall summary with prompt length: %d chars", len(prompt))
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -413,9 +423,11 @@ URL: {display_url}
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.5,
-                max_tokens=400
+                max_tokens=600
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            logger.info("Overall summary AI response length: %d chars", len(content or ""))
+            return content
         except Exception as e:
             logger.exception("Error generating overall summary: %s", e)
             return "全体まとめの生成に失敗しました。"
