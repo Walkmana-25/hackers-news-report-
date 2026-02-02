@@ -11,7 +11,7 @@ import sys
 import re
 import requests
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from openai import OpenAI
 
 
@@ -313,6 +313,23 @@ def main():
         reviewed_report = generator.self_review_report(report)
         
         print("Report reviewed and improved")
+
+        # Fallback: ensure the report has sufficient content
+        if not reviewed_report or len(reviewed_report.strip()) < 200:
+            print("Generated report was too short. Using fallback template.")
+            jst = timezone(timedelta(hours=9))
+            current_date = datetime.now(jst).strftime('%Y年%m月%d日')
+            lines = [
+                f"Hacker News Daily Report - {current_date}",
+                "ご覧いただきありがとうございます。テクノロジーニュースの担当です。",
+                "",
+                "今日のHacker News:"
+            ]
+            for story in stories:
+                title = story.get('title', 'No title')
+                url = story.get('url') or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+                lines.append(f"- {title} ({url})")
+            reviewed_report = "\n".join(lines)
         
         # Step 4: Post to Discord
         print("Posting report to Discord...")
