@@ -15,6 +15,9 @@ import requests
 from typing import List, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
+import trafilatura
+from readability import Document
+from bs4 import BeautifulSoup
 
 MIN_SUMMARY_LENGTH = 50
 
@@ -86,26 +89,237 @@ class HackerNewsAPI:
             return None
 
 
+class WebContentFetcher:
+    """Fetches and extracts article content from URLs"""
+
+    def __init__(self, timeout: int = 10, max_content_chars: int = 3000):
+        """Initialize fetcher with timeout configuration"""
+        self.timeout = timeout
+        self.max_content_chars = max_content_chars
+        self.user_agent = "Mozilla/5.0 (compatible; HN-Report-Generator/1.0)"
+
+    def fetch_article_content(self, url: str) -> Dict[str, Optional[str]]:
+        """
+        Fetch and extract article content from URL
+
+        Args:
+            url: The article URL to fetch
+
+        Returns:
+            Dictionary with:
+                - 'content': Extracted article text (or None if failed)
+                - 'title': Article title from page (or None)
+                - 'error': Error message if failed (or None)
+                - 'method': Which extraction method succeeded
+        """
+        # Check if URL should be skipped
+        if self._should_skip_url(url):
+            return {
+                'content': None,
+                'title': None,
+                'error': 'URL skipped (internal or unsupported type)',
+                'method': None
+            }
+
+        try:
+            # Fetch the page
+            headers = {'User-Agent': self.user_agent}
+            response = requests.get(url, headers=headers, timeout=self.timeout)
+            response.raise_for_status()
+            html_content = response.text
+
+            # Try extraction methods in order
+            content = None
+            method = None
+
+            # Method 1: Trafilatura (primary)
+            content = self._extract_with_trafilatura(html_content)
+            if content:
+                method = 'trafilatura'
+
+            # Method 2: Readability (fallback)
+            if not content:
+                content = self._extract_with_readability(html_content)
+                if content:
+                    method = 'readability'
+
+            # Method 3: Basic text extraction (last resort)
+            if not content:
+                content = self._extract_basic_text(html_content)
+                if content:
+                    method = 'basic'
+
+            if content:
+                # Truncate if necessary
+                content = self._truncate_content(content)
+                logger.info("Successfully fetched article content using %s: %d chars", method, len(content))
+                return {
+                    'content': content,
+                    'title': None,  # Could extract title if needed
+                    'error': None,
+                    'method': method
+                }
+            else:
+                return {
+                    'content': None,
+                    'title': None,
+                    'error': 'No content could be extracted',
+                    'method': None
+                }
+
+        except requests.exceptions.Timeout:
+            logger.warning("Timeout fetching article from %s", url)
+            return {
+                'content': None,
+                'title': None,
+                'error': 'Request timeout',
+                'method': None
+            }
+        except requests.exceptions.HTTPError as e:
+            logger.warning("HTTP error fetching article from %s: %s", url, e)
+            return {
+                'content': None,
+                'title': None,
+                'error': f'HTTP error: {e}',
+                'method': None
+            }
+        except Exception as e:
+            logger.warning("Error fetching article from %s: %s", url, e)
+            return {
+                'content': None,
+                'title': None,
+                'error': str(e),
+                'method': None
+            }
+
+    def _should_skip_url(self, url: str) -> bool:
+        """Check if URL should be skipped (HN internal, etc.)"""
+        if not url:
+            return True
+        # Skip Hacker News internal URLs
+        if 'news.ycombinator.com' in url:
+            return True
+        # Skip PDF and other non-HTML files
+        skip_extensions = ('.pdf', '.zip', '.exe', '.dmg', '.iso')
+        if url.lower().endswith(skip_extensions):
+            return True
+        return False
+
+    def _extract_with_trafilatura(self, html: str) -> Optional[str]:
+        """Extract article content using Trafilatura"""
+        try:
+            content = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=False,
+                no_fallback=False
+            )
+            if content and len(content.strip()) > 50:
+                return content.strip()
+        except Exception as e:
+            logger.debug("Trafilatura extraction failed: %s", e)
+        return None
+
+    def _extract_with_readability(self, html: str) -> Optional[str]:
+        """Extract article content using readability-lxml"""
+        try:
+            doc = Document(html)
+            content = doc.summary()
+            # Extract text from the HTML summary
+            soup = BeautifulSoup(content, 'lxml')
+            # Get all paragraph text
+            paragraphs = soup.find_all('p')
+            text = ' '.join(p.get_text() for p in paragraphs if p.get_text())
+            if text and len(text.strip()) > 50:
+                return text.strip()
+        except Exception as e:
+            logger.debug("Readability extraction failed: %s", e)
+        return None
+
+    def _extract_basic_text(self, html: str) -> Optional[str]:
+        """Basic text extraction as last resort"""
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+            # Remove script, style, nav, footer elements
+            for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                element.decompose()
+            # Get all paragraph text
+            paragraphs = soup.find_all('p')
+            text = ' '.join(p.get_text() for p in paragraphs if p.get_text())
+            if text and len(text.strip()) > 50:
+                return text.strip()
+        except Exception as e:
+            logger.debug("Basic text extraction failed: %s", e)
+        return None
+
+    def _truncate_content(self, content: str) -> str:
+        """
+        Intelligently truncate content to fit within token limits
+
+        Strategy: Keep first part (intro) and last part (conclusion),
+        truncate middle if needed.
+        """
+        if len(content) <= self.max_content_chars:
+            return content
+
+        # Keep first 2/3 and last 1/3 within limit
+        first_part_size = int(self.max_content_chars * 0.6)
+        last_part_size = self.max_content_chars - first_part_size - 20  # 20 chars for ellipsis
+
+        first_part = content[:first_part_size]
+        last_part = content[-last_part_size:]
+
+        return f"{first_part}\n\n...（中略）...\n\n{last_part}"
+
+
 class ReportGenerator:
     """Generates report using OpenAI-compatible API"""
-    
+
+    # Check if article fetching is enabled
+    ENABLE_ARTICLE_FETCH = os.getenv("ENABLE_ARTICLE_FETCH", "true").lower() == "true"
+
     def __init__(self, api_key: str, base_url: Optional[str] = None, model: Optional[str] = None):
         """Initialize OpenAI client with custom base URL if provided"""
         client_kwargs = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url
-        
+
         self.client = OpenAI(**client_kwargs)
         # Use provided model, or get from env, or use default
         self.model = model or os.getenv("OPENAI_MODEL") or "gpt-3.5-turbo"
+
+        # Initialize content fetcher if enabled
+        if self.ENABLE_ARTICLE_FETCH:
+            self.content_fetcher = WebContentFetcher(
+                timeout=int(os.getenv("ARTICLE_FETCH_TIMEOUT", "10")),
+                max_content_chars=int(os.getenv("MAX_ARTICLE_CONTENT_CHARS", "3000"))
+            )
+        else:
+            self.content_fetcher = None
     
     def generate_story_summary(self, story: Dict, index: int) -> str:
         """Generate summary for a single story"""
         title = story.get("title", "No title")
-        url = story.get("url") or f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+        url = story.get("url")
+        hn_url = f"https://news.ycombinator.com/item?id={story.get('id', '')}"
+        # Use original URL if available, otherwise use HN discussion URL
+        display_url = url or hn_url
         score = story.get("score", 0)
         comments = story.get("top_comments", [])
-        
+
+        # Fetch article content if available and enabled
+        article_content = None
+        fetch_error = None
+        if url and self.content_fetcher:
+            fetch_result = self.content_fetcher.fetch_article_content(url)
+            if fetch_result['content']:
+                article_content = fetch_result['content']
+                logger.info("Successfully fetched article content for story %d: %d chars using %s",
+                           index, len(article_content), fetch_result['method'])
+            else:
+                fetch_error = fetch_result.get('error')
+                logger.warning("Could not fetch article content for story %d: %s", index, fetch_error)
+
         # Prepare comments text
         comments_text = []
         for c in comments:
@@ -116,17 +330,37 @@ class ReportGenerator:
             if text.strip():
                 comments_text.append(text)
         comments_joined = "\n".join(f"- {t}" for t in comments_text) if comments_text else "コメントなし"
-        
+
+        # Build prompt with actual article content
+        if article_content:
+            content_section = f"""
+【記事本文】
+{article_content}
+"""
+        elif url and fetch_error:
+            content_section = f"""
+【記事本文】
+※記事の本文を取得できませんでした（{fetch_error}）。
+タイトルとURL情報から記事の概要を推測してください。
+"""
+        else:
+            content_section = """
+【記事本文】
+※Ask HN / Show HN のため外部記事がありません。
+Hacker News上の情報から内容を推測してください。
+"""
+
         prompt = f"""Hacker Newsのトップ記事 {index} を要約してください。
 タイトル: {title}
-URL: {url}
+URL: {display_url}
 スコア: {score}
-主なコメント:
+{content_section}
+【Hacker News上の主なコメント】
 {comments_joined}
 
 以下の形式で短い日本語メッセージを作成してください:
 - タイトルとURL
-- 記事本文の推測要約（リンク先の概要として簡潔に）
+- 記事内容の要約（実際の記事内容に基づいて簡潔に）
 - コメントから読み取れるポイントの要約
 - なぜ重要か/興味深いかを一文
 """
@@ -151,13 +385,13 @@ URL: {url}
             if not content or not content.strip():
                 logger.warning("Empty summary returned for story %d; using fallback text.", index)
                 content = (
-                    f"{title} ({url}) の要約を生成できませんでした。"
+                    f"{title} ({display_url}) の要約を生成できませんでした。"
                     f" スコア: {score}。主要コメント: {comments_joined}"
                 )
             return content
         except Exception as e:
             logger.exception("Error generating story summary: %s", e)
-            return f"{title} ({url}) の要約生成に失敗しました。"
+            return f"{title} ({display_url}) の要約生成に失敗しました。"
 
     def generate_overall_summary(self, story_messages: List[str]) -> str:
         """Generate overall summary from per-story messages"""
