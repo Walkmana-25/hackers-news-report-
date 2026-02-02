@@ -9,10 +9,14 @@ and posts it to Discord via webhook.
 import os
 import sys
 import re
+import logging
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
+
+
+logger = logging.getLogger(__name__)
 
 
 class HackerNewsAPI:
@@ -27,7 +31,7 @@ class HackerNewsAPI:
             response = requests.get(f"{self.BASE_URL}/topstories.json", timeout=10)
             response.raise_for_status()
             story_ids = response.json()
-            print(f"Fetched {len(story_ids)} top story IDs. Targeting first {limit}.")
+            logger.info("Fetched %d top story IDs. Targeting first %d.", len(story_ids), limit)
             
             # Fetch details for each story until we collect the desired limit
             stories = []
@@ -35,16 +39,21 @@ class HackerNewsAPI:
                 story = self._get_item(story_id)
                 if story:
                     stories.append(story)
-                    print(f"Collected story {len(stories)}/{limit}: {story.get('title', 'No title')}")
+                    logger.info(
+                        "Collected story %d/%d: %s",
+                        len(stories),
+                        limit,
+                        story.get('title', 'No title')
+                    )
                 else:
-                    print(f"Skipping story ID {story_id} due to fetch error or missing data.")
+                    logger.warning("Skipping story ID %s due to fetch error or missing data.", story_id)
                 
                 if len(stories) >= limit:
                     break
             
             return stories
         except Exception as e:
-            print(f"Error fetching top stories: {e}")
+            logger.exception("Error fetching top stories: %s", e)
             return []
     
     def _get_item(self, item_id: int, depth: int = 0) -> Optional[Dict]:
@@ -212,14 +221,14 @@ class DiscordWebhook:
             else:
                 chunks = self._split_content(content, 2000)
             
-            print(f"Posting report to Discord in {len(chunks)} message(s).")
+            logger.info("Posting report to Discord in %d message(s).", len(chunks))
             for idx, chunk in enumerate(chunks, 1):
-                print(f"Sending chunk {idx}/{len(chunks)} (length: {len(chunk)})...")
+                logger.info("Sending chunk %d/%d (length: %d)...", idx, len(chunks), len(chunk))
                 self._send_chunk(chunk)
             
             return True
         except Exception as e:
-            print(f"Error posting to Discord: {e}")
+            logger.exception("Error posting to Discord: %s", e)
             return False
     
     def _send_chunk(self, content: str):
@@ -266,7 +275,12 @@ class DiscordWebhook:
 
 def main():
     """Main execution function"""
-    print("Starting Hacker News Daily Report Generator...")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logger.info("Starting Hacker News Daily Report Generator...")
     
     # Get configuration from environment variables
     github_token = os.getenv("GITHUB_TOKEN")
@@ -277,9 +291,9 @@ def main():
     
     # Prioritize user-provided API key, fallback to GitHub Models
     if openai_api_key:
-        print("Using configured OpenAI-compatible API...")
+        logger.info("Using configured OpenAI-compatible API...")
     elif github_token:
-        print("Using GitHub Models for AI generation (no API key configured)...")
+        logger.info("Using GitHub Models for AI generation (no API key configured)...")
         openai_api_key = github_token
         # GitHub Models inference endpoint
         if not openai_base_url:
@@ -289,43 +303,43 @@ def main():
             openai_model = "gpt-4o-mini"
     else:
         # Neither API key nor GitHub token available
-        print("Error: No API configuration found")
-        print("  - Set OPENAI_API_KEY in secrets/environment, or")
-        print("  - Run in GitHub Actions where GITHUB_TOKEN is automatically available")
+        logger.error("Error: No API configuration found")
+        logger.error("  - Set OPENAI_API_KEY in secrets/environment, or")
+        logger.error("  - Run in GitHub Actions where GITHUB_TOKEN is automatically available")
         sys.exit(1)
     
     if not discord_webhook_url:
-        print("Error: DISCORD_WEBHOOK_URL environment variable is required")
+        logger.error("Error: DISCORD_WEBHOOK_URL environment variable is required")
         sys.exit(1)
     
     try:
         # Step 1: Fetch top 5 stories from Hacker News
-        print("Fetching top 5 stories from Hacker News...")
+        logger.info("Fetching top 5 stories from Hacker News...")
         hn_api = HackerNewsAPI()
         stories = hn_api.get_top_stories(limit=5)
         
         if not stories:
-            print("Error: No stories fetched")
+            logger.error("Error: No stories fetched")
             sys.exit(1)
         
-        print(f"Fetched {len(stories)} stories")
+        logger.info("Fetched %d stories", len(stories))
         
         # Step 2: Generate report using AI
-        print("Generating report with AI...")
+        logger.info("Generating report with AI...")
         generator = ReportGenerator(openai_api_key, openai_base_url, openai_model)
         report = generator.generate_report(stories)
         
-        print("Initial report generated")
+        logger.info("Initial report generated")
         
         # Step 3: Self-review the report
-        print("Self-reviewing report with AI...")
+        logger.info("Self-reviewing report with AI...")
         reviewed_report = generator.self_review_report(report)
         
-        print("Report reviewed and improved")
+        logger.info("Report reviewed and improved")
 
         # Fallback: ensure the report has sufficient content
         if not reviewed_report or len(reviewed_report.strip()) < 200:
-            print("Generated report was too short. Using fallback template.")
+            logger.warning("Generated report was too short. Using fallback template.")
             jst = timezone(timedelta(hours=9))
             current_date = datetime.now(jst).strftime('%Y年%m月%d日')
             lines = [
@@ -341,23 +355,19 @@ def main():
             reviewed_report = "\n".join(lines)
         
         # Step 4: Post to Discord
-        print("Posting report to Discord...")
+        logger.info("Posting report to Discord...")
         webhook = DiscordWebhook(discord_webhook_url)
         success = webhook.post_message(reviewed_report)
         
         if success:
-            print("✓ Report successfully posted to Discord!")
-            print("\n" + "="*50)
-            print("FINAL REPORT:")
-            print("="*50)
-            print(reviewed_report)
-            print("="*50)
+            logger.info("✓ Report successfully posted to Discord!")
+            logger.info("FINAL REPORT:\n%s", reviewed_report)
         else:
-            print("✗ Failed to post report to Discord")
+            logger.error("✗ Failed to post report to Discord")
             sys.exit(1)
             
     except Exception as e:
-        print(f"Error in main execution: {e}")
+        logger.exception("Error in main execution: %s", e)
         import traceback
         traceback.print_exc()
         sys.exit(1)
