@@ -26,14 +26,21 @@ class HackerNewsAPI:
             # Get top story IDs
             response = requests.get(f"{self.BASE_URL}/topstories.json", timeout=10)
             response.raise_for_status()
-            story_ids = response.json()[:limit]
+            story_ids = response.json()
+            print(f"Fetched {len(story_ids)} top story IDs. Targeting first {limit}.")
             
-            # Fetch details for each story
+            # Fetch details for each story until we collect the desired limit
             stories = []
             for story_id in story_ids:
                 story = self._get_item(story_id)
                 if story:
                     stories.append(story)
+                    print(f"Collected story {len(stories)}/{limit}: {story.get('title', 'No title')}")
+                else:
+                    print(f"Skipping story ID {story_id} due to fetch error or missing data.")
+                
+                if len(stories) >= limit:
+                    break
             
             return stories
         except Exception as e:
@@ -201,12 +208,14 @@ class DiscordWebhook:
             # Discord has a 2000 character limit per message
             # Split if necessary
             if len(content) <= 2000:
-                self._send_chunk(content)
+                chunks = [content]
             else:
-                # Split into chunks
                 chunks = self._split_content(content, 2000)
-                for chunk in chunks:
-                    self._send_chunk(chunk)
+            
+            print(f"Posting report to Discord in {len(chunks)} message(s).")
+            for idx, chunk in enumerate(chunks, 1):
+                print(f"Sending chunk {idx}/{len(chunks)} (length: {len(chunk)})...")
+                self._send_chunk(chunk)
             
             return True
         except Exception as e:
