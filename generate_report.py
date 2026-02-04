@@ -441,20 +441,23 @@ URL: {display_url}
                     f"{title} ({display_url}) の要約を生成できませんでした。"
                     f" スコア: {score}。主要コメント: {comments_joined}"
                 )
+            # Add article number prefix
+            content = f"【記事 {index}】\n{content}"
             return content
         except Exception as e:
             logger.exception("Error generating story summary: %s", e)
             return f"{title} ({display_url}) の要約生成に失敗しました。"
 
     def generate_overall_summary(self, story_messages: List[str]) -> str:
-        """Generate overall summary from per-story messages"""
+        """Generate enhanced overall summary from per-story messages"""
         joined = "\n\n".join(story_messages)
         count = len(story_messages)
-        if count == 1:
-            lead_text = "以下の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
-        else:
-            lead_text = f"以下の{count}件の記事要約を元に、全体の傾向とまとめを短く作成してください。日本語で200文字程度でお願いします。"
-        prompt = f"""{lead_text}
+        prompt = f"""以下の{count}件の記事要約を元に、本日のHacker Newsの全体像をまとめてください。
+
+## 要件
+1. **全体の傾向**: 今日のニュースに共通するテーマや傾向を分析
+2. **主要トピック**: 特筆すべき技術トピックや議論の焦点
+3. **簡潔さ**: 日本語で300文字程度で簡潔にまとめる
 
 {joined}
 """
@@ -483,10 +486,99 @@ URL: {display_url}
                     logger.info("Using reasoning_content for overall summary: %d chars", len(content or ""))
 
             logger.info("Overall summary AI response length: %d chars", len(content or ""))
-            return content
+            return f"## 📋 本日の全体まとめ\n{content}"
         except Exception as e:
             logger.exception("Error generating overall summary: %s", e)
-            return "全体まとめの生成に失敗しました。"
+            return "## 📋 本日の全体まとめ\n全体まとめの生成に失敗しました。"
+
+    def extract_key_themes(self, story_messages: List[str]) -> str:
+        """Extract key themes and trends from the stories"""
+        joined = "\n\n".join(story_messages)
+        count = len(story_messages)
+        prompt = f"""以下の{count}件の記事要約から、今日のキーテーマとトレンドを抽出してください。
+
+## 要件
+1. **共通テーマ**: 記事間で共通するテーマやパターンを3つ以内で特定
+2. **技術トレンド**: エンジニアリングや技術に関連するトレンドを特定
+3. **簡潔さ**: 各テーマを1-2文で説明、日本語で200文字程度
+
+形式:
+🔑 キーテーマ: [テーマ名]
+- [説明]
+
+{joined}
+"""
+        logger.info("Extracting key themes with prompt length: %d chars", len(prompt))
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "あなたはテクノロジートレンドアナリストです。記事から共通テーマを抽出してください。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.6,
+                max_tokens=2000
+            )
+            message = response.choices[0].message
+            content = message.content
+
+            # Handle glm-4.7 model
+            if not content or not content.strip():
+                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    content = extract_japanese_response(message.reasoning_content)
+
+            logger.info("Key themes AI response length: %d chars", len(content or ""))
+            return f"## 🔑 キーテーマ\n{content}"
+        except Exception as e:
+            logger.exception("Error extracting key themes: %s", e)
+            return "## 🔑 キーテーマ\nキーテーマの抽出に失敗しました。"
+
+    def generate_engineering_insights(self, story_messages: List[str]) -> str:
+        """Generate engineering perspective and industry insights"""
+        joined = "\n\n".join(story_messages)
+        count = len(story_messages)
+        prompt = f"""以下の{count}件の記事要約から、エンジニアリング視点での総括を提供してください。
+
+## 要件
+1. **エンジニアへの示唆**: プラクティスに活かせる学びや気づき
+2. **業界動向**: テック業界の方向性や変化の兆し
+3. **技術的影響**: これらのニュースがエンジニアリング実践に与える影響
+4. **簡潔さ**: 日本語で250文字程度
+
+形式:
+💡 エンジニアリング視点
+- [エンジニアへの示唆]
+- [業界動向の分析]
+- [技術的影響]
+
+{joined}
+"""
+        logger.info("Generating engineering insights with prompt length: %d chars", len(prompt))
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "あなたはシニアエンジニア兼テクノロジーアドバイザーです。エンジニアリングの視点からインサイトを提供してください。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=2000
+            )
+            message = response.choices[0].message
+            content = message.content
+
+            # Handle glm-4.7 model
+            if not content or not content.strip():
+                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                    content = extract_japanese_response(message.reasoning_content)
+
+            logger.info("Engineering insights AI response length: %d chars", len(content or ""))
+            return f"## 💡 エンジニアリング視点\n{content}"
+        except Exception as e:
+            logger.exception("Error generating engineering insights: %s", e)
+            return "## 💡 エンジニアリング視点\nエンジニアリング視点の総括に失敗しました。"
     
     def _prepare_context(self, stories: List[Dict]) -> str:
         """Prepare formatted context from stories"""
@@ -643,7 +735,16 @@ def main():
         generator = ReportGenerator(openai_api_key, openai_base_url, openai_model)
         webhook = DiscordWebhook(discord_webhook_url)
 
-        # Step 2: Per-article processing loop
+        # Step 2: Send date header
+        jst = timezone(timedelta(hours=9))
+        today = datetime.now(jst)
+        date_header = f"📅 {today.strftime('%Y年%-m月%-d日')} の Hacker News トップ記事"
+        logger.info("Posting date header to Discord...")
+        if not webhook.post_message(date_header):
+            logger.error("✗ Failed to post date header to Discord")
+            sys.exit(1)
+
+        # Step 3: Per-article processing loop
         story_messages = []
         max_items = min(5, len(stories))
         for index, story in enumerate(stories[:max_items], start=1):
@@ -660,8 +761,13 @@ def main():
             if not webhook.post_message(message):
                 logger.error("✗ Failed to post story %d message to Discord", index)
                 sys.exit(1)
-        
-        # Step 3: Overall summary
+            # Add separator after each article (except the last one)
+            if index < max_items:
+                if not webhook.post_message("─────────"):
+                    logger.error("✗ Failed to post article separator to Discord")
+                    sys.exit(1)
+
+        # Step 4: Overall summary
         if not story_messages:
             logger.error("Error: No successful story summaries generated; aborting overall summary generation")
             sys.exit(1)
@@ -687,6 +793,31 @@ def main():
         logger.info("Posting overall summary to Discord...")
         if not webhook.post_message(overall_summary):
             logger.error("✗ Failed to post overall summary to Discord")
+            sys.exit(1)
+
+        # Step 5: Key themes extraction
+        logger.info("Extracting key themes...")
+        key_themes = generator.extract_key_themes(story_messages)
+        if not webhook.post_message("─────────"):
+            logger.error("✗ Failed to post section separator to Discord")
+            sys.exit(1)
+        if not webhook.post_message(key_themes):
+            logger.error("✗ Failed to post key themes to Discord")
+            sys.exit(1)
+
+        # Step 6: Engineering insights
+        logger.info("Generating engineering insights...")
+        engineering_insights = generator.generate_engineering_insights(story_messages)
+        if not webhook.post_message("─────────"):
+            logger.error("✗ Failed to post section separator to Discord")
+            sys.exit(1)
+        if not webhook.post_message(engineering_insights):
+            logger.error("✗ Failed to post engineering insights to Discord")
+            sys.exit(1)
+
+        # Step 7: Post end separator
+        if not webhook.post_message("══════════"):
+            logger.error("✗ Failed to post end separator to Discord")
             sys.exit(1)
         logger.info("✓ Report successfully posted to Discord!")
         logger.info("FINAL OVERALL SUMMARY:\n%s", overall_summary)
