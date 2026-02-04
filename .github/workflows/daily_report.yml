@@ -2,8 +2,8 @@ name: Daily Hacker News Report
 
 on:
   schedule:
-    # Run every day at 9:00 AM JST (midnight UTC, which is 9:00 AM JST/UTC+9)
-    - cron: '0 0 * * *'
+    # Run every day at 4:00 AM JST (7:00 PM UTC previous day, which is 4:00 AM JST/UTC+9)
+    - cron: '0 19 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
